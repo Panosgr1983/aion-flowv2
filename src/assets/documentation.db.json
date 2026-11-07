@@ -174,7 +174,7 @@
           "akes",
           "vision.nexus"
         ],
-        "kolokotronis": [
+        "demo-client": [
           "blog",
           "crm",
           "media",
@@ -596,9 +596,9 @@
       "mmi": null
     },
     {
-      "id": "02_TENANTS.kolokotronis.CONTENT_MAPPING",
-      "title": "Tenant Content Mapping: Νικόλας Κολοκοτρώνης",
-      "path": "02_TENANTS/kolokotronis/CONTENT_MAPPING.md",
+      "id": "02_TENANTS.demo-client.CONTENT_MAPPING",
+      "title": "Tenant Content Mapping: Demo Client",
+      "path": "02_TENANTS/demo-client/CONTENT_MAPPING.md",
       "status": "—",
       "maturity": "—",
       "tags": [],
@@ -610,9 +610,9 @@
       "mmi": null
     },
     {
-      "id": "02_TENANTS.kolokotronis.HISTORY",
-      "title": "Kolokotronis — Development History",
-      "path": "02_TENANTS/kolokotronis/HISTORY.md",
+      "id": "02_TENANTS.demo-client.HISTORY",
+      "title": "demo-client — Development History",
+      "path": "02_TENANTS/demo-client/HISTORY.md",
       "status": "—",
       "maturity": "—",
       "tags": [],
@@ -624,9 +624,9 @@
       "mmi": null
     },
     {
-      "id": "02_TENANTS.kolokotronis.README",
-      "title": "Tenant: Νικόλας Κολοκοτρώνης",
-      "path": "02_TENANTS/kolokotronis/README.md",
+      "id": "02_TENANTS.demo-client.README",
+      "title": "Tenant: Demo Client",
+      "path": "02_TENANTS/demo-client/README.md",
       "status": "—",
       "maturity": "—",
       "tags": [],
@@ -719,7 +719,7 @@
       "last_reviewed": "2026-07-12",
       "review_after": "2026-10-12",
       "used_by": [
-        "kolokotronis"
+        "demo-client"
       ],
       "relationships": {
         "uses": [
@@ -807,7 +807,7 @@
       "last_reviewed": "2026-07-12",
       "review_after": "2026-10-12",
       "used_by": [
-        "kolokotronis"
+        "demo-client"
       ],
       "relationships": {
         "uses": [
@@ -967,7 +967,7 @@
       "last_reviewed": "2026-07-12",
       "review_after": "2026-10-12",
       "used_by": [
-        "kolokotronis",
+        "demo-client",
         "ktima-kareli"
       ],
       "relationships": {
@@ -1033,7 +1033,7 @@
       "last_reviewed": "2026-07-12",
       "review_after": "2026-10-12",
       "used_by": [
-        "kolokotronis",
+        "demo-client",
         "ktima-kareli"
       ],
       "relationships": {
@@ -1078,7 +1078,7 @@
       "last_reviewed": "2026-07-12",
       "review_after": "2026-10-12",
       "used_by": [
-        "kolokotronis",
+        "demo-client",
         "ktima-kareli"
       ],
       "relationships": null,
@@ -1538,7 +1538,7 @@
       "last_reviewed": "2026-07-12",
       "review_after": "2026-10-12",
       "used_by": [
-        "kolokotronis",
+        "demo-client",
         "ktima-kareli",
         "portfolio",
         "retreat"
@@ -1819,9 +1819,9 @@
       "mmi": null
     },
     {
-      "id": "CONTENT_MAPPING_KOLOKOTRONIS",
-      "title": "Tenant Content Mapping: Νικόλας Κολοκοτρώνης",
-      "path": "CONTENT_MAPPING_KOLOKOTRONIS.md",
+      "id": "CONTENT_MAPPING_demo-client",
+      "title": "Tenant Content Mapping: Demo Client",
+      "path": "CONTENT_MAPPING_demo-client.md",
       "status": "—",
       "maturity": "—",
       "tags": [],

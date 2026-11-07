@@ -37,7 +37,7 @@ const BLOCKERS = [
 ];
 
 const TENANT_LABELS: Record<string, string> = {
-  'kolokotronis': 'Κολοκοτρώνης',
+  'demo-client': 'Demo Client',
   'ktima-kareli': 'Κτήμα Καρέλη',
   'aion-flow': 'AION Flow',
 };

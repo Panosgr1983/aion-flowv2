@@ -57,7 +57,7 @@ export default function AnalyticsDashboard() {
         <h2 className="text-xl font-semibold flex items-center gap-2">
           <BarChart3 size={20} className="text-blue-400" /> Web Analytics
         </h2>
-        <p className="text-sm text-gray-500">Επισκεψιμότητα του kolokotronis.gr</p>
+        <p className="text-sm text-gray-500">Επισκεψιμότητα του demo.example.gr</p>
       </div>
 
       {loading ? (
