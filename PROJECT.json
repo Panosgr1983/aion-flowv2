@@ -1,0 +1,22 @@
+{
+  "$schema": "aion-project-stamp/v1",
+  "slug": "aion-flowv2",
+  "type": "demo",
+  "owner": "aion",
+  "domain": null,
+  "vercel": [
+    {
+      "project": "aion-flowv2",
+      "production": "79840584",
+      "aliases": []
+    }
+  ],
+  "git": {
+    "remote": "https://github.com/Panosgr1983/aion-flowv2.git",
+    "branch": "main"
+  },
+  "live": false,
+  "protected": false,
+  "createdAt": "2026-11-07T19:09:35.300Z",
+  "note": "Αυτή η σφραγίδα είναι η δήλωση ταυτότητας. Μην τη σβήσεις."
+}
