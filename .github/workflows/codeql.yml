@@ -1,0 +1,63 @@
+# CodeQL — Στατική ανάλυση ασφαλείας
+#
+# Δωρεάν για public repos. Δεν απαιτεί τοπική εγκατάσταση.
+# Τρέχει στο GitHub cloud.
+#
+# Τι κάνει:
+#   • Data flow analysis (taint tracking)
+#   • Εντοπισμός injection, XSS, path traversal
+#   • Hardcoded credentials
+#   • Insecure deserialization
+#   • 200+ security queries για JavaScript/TypeScript
+#
+# Αποτελέσματα: Security tab → Code scanning alerts
+#
+# ΔΕΝ επηρεάζει τα υπάρχοντα workflows (backup-schedule, email-sync).
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Εβδομαδιαίος έλεγχος — Δευτέρα 06:00 UTC
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+  packages: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            build-mode: none
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # security-extended: πιο αυστηρό από το default
+          queries: security-extended
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
