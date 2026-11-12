@@ -274,7 +274,9 @@ Deno.serve(async (req) => {
 
           const emailMatch = from.match(/<([^>]+)>/);
           const fromEmail = emailMatch ? emailMatch[1] : from;
-          const fromName = from.replace(/<[^>]+>/, '').trim() || fromEmail;
+          // 🔴 sanitizeText: bounded strip + escape (CodeQL-safe)
+          const rawName = from.replace(/<[^>]*>/g, '').trim();
+          const fromName = sanitizeText(rawName) || sanitizeText(fromEmail);
 
           let body = '';
           const extract = (part: { mimeType?: string; body?: { data?: string }; parts?: unknown[] }) => {
