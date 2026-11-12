@@ -24,7 +24,11 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: 'Invalid type' }), { status: 400, headers: CORS_HEADERS });
     }
 
-    const tenantId = tenant_id || '00000000-0000-0000-0000-000000000001';
+    // 🔴 FIX (Inspector A2): Απαιτείται ρητό tenant_id. ΟΧΙ default.
+    if (!tenant_id || typeof tenant_id !== 'string') {
+      return new Response(JSON.stringify({ error: 'tenant_id is required' }), { status: 400, headers: CORS_HEADERS });
+    }
+    const tenantId = tenant_id;
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -32,6 +36,23 @@ Deno.serve(async (req) => {
 
     const { data: { user } } = await supabase.auth.getUser();
     const userId = user?.id || null;
+
+    // 🔴 FIX (Inspector A1): ΑΠΑΙΤΕΙΤΑΙ authenticated user. Χωρίς αυτό → 401.
+    if (!userId) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: CORS_HEADERS });
+    }
+
+    // 🔴 FIX: Επιβεβαίωση ότι ο χρήστης ανήκει στο ζητούμενο tenant
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('tenant_id, is_super_admin')
+      .eq('id', userId)
+      .maybeSingle();
+
+    const isSuper = profile?.is_super_admin === true;
+    if (!isSuper && profile?.tenant_id !== tenantId) {
+      return new Response(JSON.stringify({ error: 'Forbidden: tenant mismatch' }), { status: 403, headers: CORS_HEADERS });
+    }
 
     // Create job record
     const { data: job, error: jobErr } = await supabase
@@ -127,9 +148,9 @@ Deno.serve(async (req) => {
         source: 'worker',
       }).then(undefined, () => {});
 
-      return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: CORS_HEADERS });
+      return new Response(JSON.stringify({ error: 'Backup failed' }), { status: 500, headers: CORS_HEADERS });
     }
   } catch (err: any) {
-    return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers: CORS_HEADERS });
+    return new Response(JSON.stringify({ error: 'Internal error' }), { status: 500, headers: CORS_HEADERS });
   }
 });

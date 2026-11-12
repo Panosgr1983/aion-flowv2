@@ -17,6 +17,15 @@ import { Mail, Phone, Clock, Archive, Trash2, Forward as ForwardIcon, Paperclip,
 import { contactMessagesHelper } from '../../lib/dataHelpers';
 import { uploadFile } from '../../lib/storage';
 import { Conversation, ContactMessage, Attachment } from '../../types/supabase';
+import { supabase } from '../../lib/supabase';
+
+
+// C4 FIX: authenticated requests για reply/forward
+async function __getAuthHeader(): Promise<Record<string, string>> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY;
+  return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
+}
 
 interface Props {
   conversation: Conversation | null;
@@ -93,7 +102,7 @@ export default function ThreadView({ conversation, thread, onThreadUpdate, onRep
       const atts = await uploadAttachments(attachments);
       const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-contact-email`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+        headers: await __getAuthHeader(),
         body: JSON.stringify({
           type: 'forward', to: forwardTo.trim(),
           subject: `Fwd: ${lastMsg.subject || 'Μήνυμα'}`,

@@ -25,6 +25,15 @@ import { Send, X, Paperclip, Bold, Italic, Link, ChevronDown, Mail, Plus, Trash2
 import { uploadFile } from '../../lib/storage';
 import { contactMessagesHelper, conversationsHelper, draftsHelper, siteSettingsHelper } from '../../lib/dataHelpers';
 import { Attachment, EmailDraft } from '../../types/supabase';
+import { supabase } from '../../lib/supabase';
+
+
+// C4 FIX: authenticated requests για reply/forward
+async function __getAuthHeader(): Promise<Record<string, string>> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY;
+  return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
+}
 
 interface Props {
   mode: 'new' | 'reply' | 'forward' | 'draft';
@@ -130,7 +139,7 @@ export default function ComposeWindow({ mode, prefill, onClose, onSent }: Props)
       } as any);
 
       fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-contact-email`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+        method: 'POST', headers: await __getAuthHeader(),
         body: JSON.stringify({ type: 'reply', to: to.trim(), subject: subject || '(χωρίς θέμα)', message: fullBody, email: to.trim(), attachments: atts }),
       }).catch(e => console.error('Send error:', e));
 

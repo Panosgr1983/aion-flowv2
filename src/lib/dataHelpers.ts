@@ -31,6 +31,15 @@ import { Category, Product, Customer, Order, Media, Service, BlogPost, Testimoni
 import { trackEvent } from './analytics';
 import { withTenant } from './useTenantQuery';
 import { getCurrentTenantContext } from './TenantContext';
+import { getCurrentTenantContext } from './TenantContext';
+
+
+// C4 FIX: authenticated requests για reply/forward
+async function __getAuthHeader(): Promise<Record<string, string>> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY;
+  return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
+}
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -139,30 +148,30 @@ export function getDataMode(): 'live' | 'demo' {
 export const categoriesHelper = {
   async getAll(): Promise<Category[]> {
     if (!isSupabaseAvailable()) { await delay(300); return mockCategories; }
-    const { data, error } = await supabase.from('categories').select('*').order('sort_order');
+    const { data, error } = await withTenant(supabase.from('categories').select('*').order('sort_order'));
     if (error) throw error;
     return data ?? [];
   },
   async getById(id: string): Promise<Category | null> {
     if (!isSupabaseAvailable()) { await delay(200); return mockCategories.find(c => c.id === id) ?? null; }
-    const { data } = await supabase.from('categories').select('*').eq('id', id).maybeSingle();
+    const { data } = await withTenant(supabase.from('categories').select('*').eq('id', id)).maybeSingle();
     return data;
   },
   async create(category: Partial<Category>): Promise<Category> {
     if (!isSupabaseAvailable()) { await delay(300); const newCat: Category = { ...category as Category, id: crypto.randomUUID(), created_at: new Date().toISOString(), updated_at: new Date().toISOString(), product_count: 0 }; mockCategories.push(newCat); return newCat; }
-    const { data, error } = await supabase.from('categories').insert(category).select().single();
+    const { data, error } = await supabase.from('categories').insert({ ...category, tenant_id: getCurrentTenantContext() }).select().single();
     if (error) throw error;
     return data;
   },
   async update(id: string, updates: Partial<Category>): Promise<Category> {
     if (!isSupabaseAvailable()) { await delay(300); const idx = mockCategories.findIndex(c => c.id === id); if (idx !== -1) mockCategories[idx] = { ...mockCategories[idx], ...updates, updated_at: new Date().toISOString() }; return mockCategories[idx]; }
-    const { data, error } = await supabase.from('categories').update({ ...updates, updated_at: new Date().toISOString() }).eq('id', id).select().single();
+    const { data, error } = await withTenant(supabase.from('categories').update({ ...updates, updated_at: new Date().toISOString() }).eq('id', id)).select().single();
     if (error) throw error;
     return data;
   },
   async delete(id: string): Promise<void> {
     if (!isSupabaseAvailable()) { await delay(300); const idx = mockCategories.findIndex(c => c.id === id); if (idx !== -1) mockCategories.splice(idx, 1); return; }
-    const { error } = await supabase.from('categories').delete().eq('id', id);
+    const { error } = await withTenant(supabase.from('categories').delete().eq('id', id));
     if (error) throw error;
   },
 };
@@ -708,7 +717,7 @@ export const contactMessagesHelper = {
     if (typeof window !== 'undefined') {
       fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-contact-email`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` },
+        headers: await __getAuthHeader(),
         body: JSON.stringify({
           type: 'reply',
           to: parent.email,

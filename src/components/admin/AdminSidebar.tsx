@@ -16,13 +16,11 @@
 
 import { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Package, Tag, ShoppingCart, Users, BarChart3, Image, Settings, User, ChevronLeft, ChevronRight, LogOut, Mail, Wifi, WifiOff, FileText, MessageSquare, Award, Heart, Globe, Zap, Eye, History, TrendingUp, Shield, Activity, ChevronDown, Home, Terminal, Building2, Briefcase, Film, Monitor, Theater, Clock, Images, Newspaper, Video, TreePine, Compass, Calendar, CalendarCheck, HelpCircle, BrainCircuit, Search } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
+import { LayoutDashboard, Package, Tag, ShoppingCart, Users, BarChart3, Image, Settings, User, ChevronLeft, ChevronRight, LogOut, Mail, Wifi, WifiOff, FileText, MessageSquare, Award, Heart, Globe, Zap, Eye, History, TrendingUp, Shield, Activity, ChevronDown, Home, Terminal, Building2, Briefcase, HelpCircle , Layers, GraduationCap } from 'lucide-react';
+import IconMap from '../../lib/IconMap';
 
 // Icon name → component map for Module Registry sidebar items
-const iconMap: Record<string, LucideIcon> = {
-  Briefcase, User, Film, Monitor, Theater, Clock, Images, Newspaper, Video, Settings, FileText, Heart, Award, Globe, Eye, Building2, Package, Tag, ShoppingCart, Users, BarChart3, Mail, TrendingUp, Shield, Activity, Terminal, Home, History, Zap, LayoutDashboard, MessageSquare, ChevronDown, LogOut, Wifi, WifiOff, TreePine, Compass, Calendar, CalendarCheck, HelpCircle, BrainCircuit, Search,
-};
+const iconMap = IconMap;
 import { useAuth } from '../../contexts/AuthContext';
 import { conversationsHelper } from '../../lib/dataHelpers';
 import { supabase } from '../../lib/supabase';
@@ -34,6 +32,7 @@ import { FEATURE_MODULES } from '../../lib/access';
 import ModuleRegistry from '../../lib/ModuleRegistry';
 import '../../modules/portfolio/manifest';
 import '../../modules/retreat/manifest';
+import '../../modules/calendar/manifest';
 import '../../modules/akes/manifest';
 
 const shopItems = [
@@ -51,9 +50,12 @@ const contentItems: NavItem[] = [
   { path: '/dashboard/tenant-site', icon: Globe, label: 'Διαχείριση Ιστοσελίδας', permission: 'cms.view' },
   { path: '/dashboard/products', icon: Package, label: 'Βιβλία / Προϊόντα', permission: 'cms.edit' },
   { path: '/dashboard/media', icon: Image, label: 'Πολυμέσα', permission: 'cms.edit' },
+  { path: '/dashboard/students', icon: GraduationCap, label: 'Μαθητές', permission: 'cms.view' },
   { path: '/dashboard/services', icon: FileText, label: 'Υπηρεσίες', permission: 'cms.edit' },
+  { path: '/dashboard/faq', icon: HelpCircle, label: 'FAQ', permission: 'cms.edit' },
   { path: '/dashboard/blog', icon: Globe, label: 'Blog', permission: 'cms.edit' },
   { path: '/dashboard/testimonials', icon: MessageSquare, label: 'Κριτικές', permission: 'cms.edit' },
+  { path: '/dashboard/reviews', icon: MessageSquare, label: 'Κριτικές Επισκεπτών', permission: 'cms.edit' },
   { path: '/dashboard/credentials', icon: Award, label: 'Πιστοποιήσεις', permission: 'cms.edit' },
   { path: '/dashboard/core-values', icon: Heart, label: 'Αξίες', permission: 'cms.edit' },
   { path: '/dashboard/about', icon: User, label: 'Σχετικά', permission: 'cms.edit' },
@@ -69,6 +71,7 @@ const platformItems: NavItem[] = [
   { path: '/dashboard/platform', icon: Activity, label: 'Overview', permission: 'platform.overview' },
   { path: '/dashboard/evolution', icon: TrendingUp, label: 'Evolution', permission: 'platform.akes.view' },
   { path: '/dashboard/analytics', icon: BarChart3, label: 'Αναφορές', permission: 'platform.analytics' },
+  { path: '/dashboard/modules', icon: Layers, label: 'Modules', permission: 'cms.edit' },
   { path: '/dashboard/tenant', icon: Building2, label: 'Tenants', permission: 'platform.tenants' },
   { path: '/dashboard/inbox', icon: Mail, label: 'Inbox', permission: 'crm.inbox' },
   { path: '/dashboard/pipeline', icon: TrendingUp, label: 'Pipeline', permission: 'crm.pipeline' },
