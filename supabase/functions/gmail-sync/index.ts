@@ -1,32 +1,25 @@
 /*
   ═══════════════════════════════════════════════════════════════════════════
-  C3 FIX — gmail-sync/index.ts
+  C3/C4 FIX v2 — gmail-sync/index.ts
 
-  ΑΝΑΛΥΣΗ ΠΡΙΝ
-  ─────────────
-  • action='sync' (γραμμή 110): 🔴 ΜΗΔΕΝ AUTH
-  • email_accounts select('*') χωρίς tenant filter → ΟΛΩΝ των tenants
-  • contact_conversations/contact_messages insert χωρίς tenant_id
-  • catch → String(err) → Stack trace στον client
+  ΔΙΟΡΘΩΣΕΙΣ ΑΠΟ ΤΟΝ ΕΛΕΓΧΟ ΤΟΥ ΠΑΝΟΥ
+  ─────────────────────────────────────
+  #1 OAuth state flow:
+     • Πριν: το callback περίμενε Authorization header → ΔΕΝ έρχεται
+       σε browser redirect → ΣΠΑΣΜΕΝΟ
+     • Τώρα: state token με {userId, tenantId}, αποθηκευμένο server-side
+       → validate στο callback → κανένα header χρειάζεται
 
-  ΧΡΗΣΗ (μετρημένη):
-  • Δεν βρέθηκε frontend caller για 'sync' — πιθανώς cron ή manual
-  • Το 'auth' action δεν χρειάζεται auth (γεννά OAuth URL)
-  • Το OAuth callback έχει ήδη getUser (γραμμή 72)
+  #3 Shared rate limit:
+     • Πριν: in-memory Map (κάθε instance ξεχωριστά)
+     • Τώρα: PostgreSQL table `rate_limits` (shared σε όλα τα instances)
 
-  ΑΠΟΦΑΣΗ
-  ────────
-  • sync → ΑΠΑΙΤΕΙ authenticated user με role owner/admin
-  • tenant από profiles (server-side), ΟΧΙ από client
-  • email_accounts: φίλτρο tenant_id
-  • contact_conversations/contact_messages: tenant_id στα inserts
-  • Safe errors, stack trace μόνο σε logs
+  #4 Exact email match:
+     • Πριν: .ilike('email', target) — wildcards % _ ΔΟΥΛΕΥΟΥΝ
+     • Τώρα: .eq() + validation ότι δεν υπάρχουν % ή _
 
-  ΣΗΜΕΙΩΣΗ ΓΙΑ CRON
-  ──────────────────
-  Αν το sync καλείται από cron, χρειάζεται service key με ειδικό flag.
-  Για τώρα: ΜΟΝΟ authenticated admin. Αν χρειαστεί cron, θα προστεθεί
-  ξεχωριστό authenticated path.
+  #5 Fail-closed:
+     • Αν δεν υπάρχει state → 400, όχι fallback
   ═══════════════════════════════════════════════════════════════════════════
 */
 
@@ -50,32 +43,20 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-// 🔴 Safe error — δεν εκθέτει stack trace
 function safeError(status: number, code: string): Response {
   return json({ error: code }, status);
 }
 
-// HTML escape για plain-text body που μπορεί να έχει HTML
-function escapeHtml(s: string): string {
-  return String(s || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+// 🔴 #4: Exact email match — απαγόρευση wildcards
+function isValidEmailExact(email: string): boolean {
+  if (!email || typeof email !== 'string') return false;
+  // Απόρριψη wildcards
+  if (/[%_]/.test(email)) return false;
+  // Αυστηρό email regex
+  return /^[a-zA-Z0-9.!#$&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/.test(email);
 }
 
-// 🔴 Ασφαλής sanitization — ΜΟΝΟ escape, ΧΩΡΙΣ regex strip.
-//
-// Γιατί όχι strip: το CodeQL (js/incomplete-multi-character-sanitization)
-// επισημαίνει κάθε regex-based HTML strip γιατί μπορεί να αφήσει μερικό
-// `<script` όταν το input είναι κενό (empty tag <> παράγει <script).
-//
-// Λύση: ΔΕΝ αφαιρούμε tags. Τα κάνουμε ΑΒΛΑΒΗ με escape.
-// Ακόμα κι αν μείνει `<script>`, θα εμφανιστεί ως κείμενο, δεν εκτελείται.
-//
-// Το body αποθηκεύεται ως plain text στη βάση και render-άρεται με escape
-// στο frontend. Δεν είναι ποτέ HTML.
+// 🔴 Sanitization: escape-only (CodeQL-safe)
 function sanitizeText(input: string): string {
   if (!input) return '';
   return input
@@ -84,6 +65,31 @@ function sanitizeText(input: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+// 🔴 #3: Shared rate limit μέσω PostgreSQL
+async function checkRateLimit(
+  supabase: ReturnType<typeof createClient>,
+  key: string,
+  limit: number,
+  windowSeconds: number
+): Promise<boolean> {
+  try {
+    const { data, error } = await supabase.rpc('check_rate_limit', {
+      p_key: key,
+      p_limit: limit,
+      p_window_seconds: windowSeconds,
+    });
+    if (error) {
+      console.error('[rate-limit] RPC error:', error.message);
+      // Fail-open για rate limit (να μη σπάσει η υπηρεσία)
+      return true;
+    }
+    return data === true;
+  } catch (e) {
+    console.error('[rate-limit] exception:', e);
+    return true;
+  }
 }
 
 Deno.serve(async (req) => {
@@ -96,11 +102,48 @@ Deno.serve(async (req) => {
 
   const isGet = req.method === 'GET';
 
-  // ─── OAuth callback (GET με ?code=) ───
+  // ══════════════════════════════════════════════════════════════
+  // #1 OAuth callback — μέσω state token, ΟΧΙ Authorization header
+  // ══════════════════════════════════════════════════════════════
   if (isGet && url.searchParams.get('code')) {
     try {
       const code = url.searchParams.get('code')!;
+      const state = url.searchParams.get('state');
 
+      // 🔴 ΑΠΑΙΤΕΙΤΑΙ state — fail-closed
+      if (!state) {
+        console.error('[gmail-sync] OAuth callback χωρίς state');
+        return new Response('Missing state parameter. Please restart the connection.', { status: 400 });
+      }
+
+      // Validate state
+      const { data: stateRow, error: stateErr } = await supabase
+        .from('oauth_states')
+        .select('user_id, tenant_id, expires_at, used_at')
+        .eq('state', state)
+        .maybeSingle();
+
+      if (stateErr || !stateRow) {
+        console.error('[gmail-sync] Invalid state:', stateErr?.message);
+        return new Response('Invalid or expired state. Please restart the connection.', { status: 400 });
+      }
+      if (stateRow.used_at) {
+        return new Response('State already used.', { status: 400 });
+      }
+      if (new Date(stateRow.expires_at) < new Date()) {
+        return new Response('State expired. Please restart the connection.', { status: 400 });
+      }
+
+      // Mark as used (one-time)
+      await supabase
+        .from('oauth_states')
+        .update({ used_at: new Date().toISOString() })
+        .eq('state', state);
+
+      const userId = stateRow.user_id;
+      const tenantId = stateRow.tenant_id;
+
+      // Exchange code for tokens
       const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -120,35 +163,34 @@ Deno.serve(async (req) => {
       const profileRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
         headers: { Authorization: `Bearer ${tokens.access_token}` },
       });
-      const profile = await profileRes.json();
-      if (!profile.email) {
+      const gprofile = await profileRes.json();
+      if (!gprofile.email) {
         return new Response('Failed to retrieve email from Google', { status: 400 });
       }
 
-      const email = profile.email;
-      const jwt = req.headers.get('Authorization')?.replace('Bearer ', '') || '';
-      const { data: { user } } = await supabase.auth.getUser(jwt);
-      if (!user?.id) return new Response('Unauthorized', { status: 401 });
-
-      // 🔴 Πάρε tenant από profiles
-      const { data: profileRow } = await supabase
+      // Verify role: μόνο owner/admin μπορούν να συνδέσουν Gmail
+      const { data: userProfile } = await supabase
         .from('profiles')
-        .select('tenant_id')
-        .eq('id', user.id)
+        .select('role, is_super_admin')
+        .eq('id', userId)
         .maybeSingle();
 
-      if (!profileRow?.tenant_id) return new Response('No tenant', { status: 403 });
+      if (!userProfile || (!userProfile.is_super_admin && !['owner', 'admin'].includes(userProfile.role))) {
+        console.error('[gmail-sync] Insufficient role for Gmail connect:', userProfile?.role);
+        return new Response('Insufficient permissions to connect Gmail.', { status: 403 });
+      }
 
+      // Insert email account
       await supabase.from('email_accounts').insert({
-        email,
+        email: gprofile.email,
         provider: 'gmail',
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         token_expires_at: new Date(Date.now() + (tokens.expires_in || 3600) * 1000).toISOString(),
         sync_enabled: true,
         is_active: true,
-        created_by: user.id,
-        tenant_id: profileRow.tenant_id,   // 🔴 TENANT
+        created_by: userId,
+        tenant_id: tenantId,
       });
 
       return new Response(
@@ -170,9 +212,54 @@ Deno.serve(async (req) => {
     action = body?.action || 'sync';
   } catch { /* default sync */ }
 
-  // ─── Auth URL (δεν χρειάζεται auth — γεννά URL) ───
+  // ══════════════════════════════════════════════════════════════
+  // Auth URL — τώρα με state token
+  // ══════════════════════════════════════════════════════════════
   if (action === 'auth') {
     if (!GOOGLE_CLIENT_ID) return safeError(400, 'Google OAuth not configured');
+
+    // 🔴 Απαιτεί authenticated user
+    const authHeader = req.headers.get('Authorization') || '';
+    const jwt = authHeader.replace(/^Bearer\s+/i, '');
+    if (!jwt) return safeError(401, 'Unauthorized');
+
+    const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
+    const authClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: `Bearer ${jwt}` } },
+    });
+    const { data: { user } } = await authClient.auth.getUser(jwt);
+    if (!user?.id) return safeError(401, 'Unauthorized');
+
+    // Πάρε tenant
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('tenant_id, role, is_super_admin')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (!profile?.tenant_id) return safeError(403, 'No tenant');
+    if (!profile.is_super_admin && !['owner', 'admin'].includes(profile.role)) {
+      return safeError(403, 'Insufficient role');
+    }
+
+    // Δημιουργία state
+    const stateBytes = new Uint8Array(32);
+    crypto.getRandomValues(stateBytes);
+    const state = btoa(String.fromCharCode(...stateBytes))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+
+    const { error: insErr } = await supabase.from('oauth_states').insert({
+      state,
+      user_id: user.id,
+      tenant_id: profile.tenant_id,
+      provider: 'gmail',
+    });
+
+    if (insErr) {
+      console.error('[gmail-sync] state insert failed:', insErr.message);
+      return safeError(500, 'Failed to create OAuth state');
+    }
+
     const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
     authUrl.searchParams.set('client_id', GOOGLE_CLIENT_ID);
     authUrl.searchParams.set('redirect_uri', REDIRECT_URI);
@@ -180,17 +267,19 @@ Deno.serve(async (req) => {
     authUrl.searchParams.set('scope', 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send');
     authUrl.searchParams.set('access_type', 'offline');
     authUrl.searchParams.set('prompt', 'consent');
+    authUrl.searchParams.set('state', state);   // 🔴
+
     return json({ url: authUrl.toString() });
   }
 
-  // ─── SYNC — 🔴 ΑΠΑΙΤΕΙ AUTH ───
+  // ══════════════════════════════════════════════════════════════
+  // SYNC — authenticated, tenant-scoped, rate-limited
+  // ══════════════════════════════════════════════════════════════
   if (action === 'sync') {
     const authHeader = req.headers.get('Authorization') || '';
     const jwt = authHeader.replace(/^Bearer\s+/i, '');
-
     if (!jwt) return safeError(401, 'Unauthorized');
 
-    // 1) Authenticated user
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     const authClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: `Bearer ${jwt}` } },
@@ -202,26 +291,26 @@ Deno.serve(async (req) => {
       return safeError(401, 'Unauthorized');
     }
 
-    // 2) Tenant + role από profiles (server-side)
     const { data: profile } = await supabase
       .from('profiles')
-      .select('tenant_id, role')
+      .select('tenant_id, role, is_super_admin')
       .eq('id', user.id)
       .maybeSingle();
 
     if (!profile?.tenant_id) return safeError(403, 'No tenant');
-
-    // 3) Role check
-    const allowedRoles = ['owner', 'admin'];
-    if (!allowedRoles.includes(profile.role)) {
+    if (!profile.is_super_admin && !['owner', 'admin'].includes(profile.role)) {
       return safeError(403, 'Insufficient role');
     }
 
-    // 4) 🔴 TENANT-SCOPED query
+    // 🔴 #3: Shared rate limit (10 syncs/λεπτό ανά tenant)
+    const rateOk = await checkRateLimit(supabase, `sync:${profile.tenant_id}`, 10, 60);
+    if (!rateOk) return safeError(429, 'Too many sync requests');
+
+    // 🔴 TENANT-SCOPED
     const { data: accounts } = await supabase
       .from('email_accounts')
       .select('*')
-      .eq('tenant_id', profile.tenant_id)   // 🔴 ΚΡΙΣΙΜΟ
+      .eq('tenant_id', profile.tenant_id)
       .eq('is_active', true)
       .eq('sync_enabled', true);
 
@@ -251,7 +340,7 @@ Deno.serve(async (req) => {
               token_expires_at: new Date(Date.now() + (newTokens.expires_in || 3600) * 1000).toISOString(),
             })
             .eq('id', account.id)
-            .eq('tenant_id', profile.tenant_id);   // 🔴 tenant filter και στο update
+            .eq('tenant_id', profile.tenant_id);
         }
 
         const listRes = await fetch(
@@ -274,9 +363,13 @@ Deno.serve(async (req) => {
 
           const emailMatch = from.match(/<([^>]+)>/);
           const fromEmail = emailMatch ? emailMatch[1] : from;
-          // 🔴 sanitizeText: bounded strip + escape (CodeQL js/incomplete-multi-character-sanitization safe)
-          // Δεν κάνω ξεχωριστό strip — το sanitizeText το κάνει εσωτερικά
           const fromName = sanitizeText(from) || sanitizeText(fromEmail);
+
+          // 🔴 #4: Validation από email
+          if (!isValidEmailExact(fromEmail)) {
+            console.warn('[gmail-sync] Skipping invalid sender email:', fromEmail.slice(0, 50));
+            continue;
+          }
 
           let body = '';
           const extract = (part: { mimeType?: string; body?: { data?: string }; parts?: unknown[] }) => {
@@ -287,17 +380,16 @@ Deno.serve(async (req) => {
           };
           if (full.payload) extract(full.payload);
 
-          // 🔴 Sanitize: strip HTML tags με ασφαλή επαναληπτικό τρόπο
-          body = sanitizeText(body);
+          if (!body) continue;
 
-          if (!body || !fromEmail) continue;
+          // 🔴 #4: Exact email match (eq, όχι ilike)
+          const normalizedEmail = fromEmail.toLowerCase();
 
-          // 5) 🔴 TENANT-SCOPED conversation lookup
           const { data: existing } = await supabase
             .from('contact_conversations')
             .select('id')
-            .eq('tenant_id', profile.tenant_id)   // 🔴
-            .ilike('email', fromEmail.toLowerCase())
+            .eq('tenant_id', profile.tenant_id)
+            .eq('email', normalizedEmail)   // 🔴 eq, ΟΧΙ ilike
             .eq('status', 'active')
             .limit(1);
 
@@ -309,21 +401,21 @@ Deno.serve(async (req) => {
             convId = crypto.randomUUID();
             await supabase.from('contact_conversations').insert({
               id: convId,
-              tenant_id: profile.tenant_id,      // 🔴
-              email: fromEmail.toLowerCase(),
-              name: fromName,
+              tenant_id: profile.tenant_id,
+              email: normalizedEmail,
+              name: sanitizeText(fromName),
               status: 'active',
               last_message_at: new Date().toISOString(),
             });
           }
 
           await supabase.from('contact_messages').insert({
-            tenant_id: profile.tenant_id,        // 🔴
+            tenant_id: profile.tenant_id,
             conversation_id: convId,
-            name: fromName,
-            email: fromEmail.toLowerCase(),
-            subject,
-            message: body,
+            name: sanitizeText(fromName),
+            email: normalizedEmail,
+            subject: sanitizeText(subject),
+            message: sanitizeText(body),
             direction: 'incoming',
             status: 'new',
             attachments: [],
@@ -350,7 +442,7 @@ Deno.serve(async (req) => {
         results.push({ email: account.email, synced });
       } catch (err) {
         console.error('[gmail-sync] sync account error:', err instanceof Error ? err.stack : err);
-        results.push({ email: account.email, synced: 0, error: 'Sync failed' });  // 🔴 safe
+        results.push({ email: account.email, synced: 0, error: 'Sync failed' });
       }
     }
 

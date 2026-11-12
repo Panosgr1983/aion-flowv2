@@ -1,39 +1,30 @@
 /*
   ═══════════════════════════════════════════════════════════════════════════
-  C4 FIX — send-contact-email/index.ts
+  C3/C4 FIX #2 — send-contact-email tenant resolution
 
-  ΑΝΑΛΥΣΗ ΠΡΙΝ ΤΗ ΔΙΟΡΘΩΣΗ
-  ─────────────────────────
-  3 τύποι κλήσης:
-    • type='reply'   → to: payload.to   ← 🔴 ΑΥΘΑΙΡΕΤΟΣ ΠΑΡΑΛΗΠΤΗΣ
-    • type='forward' → to: payload.to   ← 🔴 ΑΥΘΑΙΡΕΤΟΣ ΠΑΡΑΛΗΠΤΗΣ
-    • type='new'     → to: contact_email ← ✅ από settings
+  ΤΟ ΠΡΟΒΛΗΜΑ (εύρημα Πάνου)
+  ──────────────────────────
+  Πριν:
+    const tenantId = Deno.env.get('TENANT_ID') || '00000000-...-001';
 
-  Όλες καλούνται με ANON KEY από το frontend:
-    headers: { Authorization: `Bearer ${ANON_KEY}` }
+  Αυτό δουλεύει μόνο για single-tenant. Στο multi-tenant AION FLOW:
+  • Όλα τα sites θα έστελναν σε ένα tenant
+  • Ή θα χρειαζόταν ξεχωριστό edge function deployment ανά tenant
 
-  Χρήση (μετρημένη):
-    • ComposeWindow.tsx:132  → type='reply'
-    • ThreadView.tsx:94      → type='forward'
-    • dataHelpers.ts:710     → type='reply'
-    • dataHelpers.ts:790     → type='new' (health check)
-
-  ΑΠΟΦΑΣΗ
-  ────────
-  • type='reply' / 'forward' = CRM ADMIN λειτουργία
-    → ΑΠΑΙΤΕΙ authenticated user με role owner/admin/secretary
-    → Ο παραλήπτης πρέπει να είναι υπαρκτή επαφή του tenant
-
-  • type='new' = δημόσια φόρμα επικοινωνίας
-    → Παραμένει δημόσια
-    → ΑΛΛΑ: rate limiting + lock στον configured contact_email
-    → Χωρίς auth (γιατί είναι public form)
+  Η ΛΥΣΗ
+  ──────
+  Tenant resolution από το Origin/Referer header:
+    1. Πάρε Origin (ή Referer αν λείπει Origin)
+    2. Extract domain
+    3. `resolve_tenant_by_domain(domain)` → tenant_id
+    4. Αν δεν βρεθεί → 400 (fail-closed, ΟΧΙ fallback)
 
   ΑΣΦΑΛΕΙΑ
   ────────
-  • Καμία service-role query χωρίς tenant filter
-  • Stack traces μόνο σε server logs
-  • Safe error messages στον client
+  • ΔΕΝ εμπιστευόμαστε client-supplied tenant_id
+  • ΔΕΝ υπάρχει hardcoded fallback UUID
+  • Αν το domain δεν έχει καταχωρηθεί → απόρριψη
+  • Το frontend ΔΕΝ χρειάζεται να στείλει tenant — το domain αρκεί
   ═══════════════════════════════════════════════════════════════════════════
 */
 
@@ -46,7 +37,6 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-// ─── Types ───
 interface BasePayload {
   type: 'new' | 'reply' | 'forward';
   name?: string;
@@ -59,43 +49,37 @@ interface BasePayload {
   attachments?: Array<{ name: string; contentType: string; data: string }>;
 }
 
-// ─── Safe error helper (δεν εκθέτει stack trace) ───
 function safeError(status: number, code: string): Response {
-  return new Response(
-    JSON.stringify({ error: code }),
-    { status, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } }
-  );
+  return new Response(JSON.stringify({ error: code }), {
+    status,
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+  });
 }
 
-// ─── Validation ───
 function validatePayload(p: unknown): { ok: true; data: BasePayload } | { ok: false; error: string } {
   if (!p || typeof p !== 'object') return { ok: false, error: 'Invalid payload' };
   const o = p as Record<string, unknown>;
 
-  const type = o.type;
-  if (type !== 'new' && type !== 'reply' && type !== 'forward') {
-    return { ok: false, error: 'Invalid type' };
-  }
+  if (o.type !== 'new' && o.type !== 'reply' && o.type !== 'forward') return { ok: false, error: 'Invalid type' };
+  if (!o.message || typeof o.message !== 'string' || !o.message.trim()) return { ok: false, error: 'Message required' };
 
-  if (!o.message || typeof o.message !== 'string' || !o.message.trim()) {
-    return { ok: false, error: 'Message required' };
-  }
-
-  // Email format check
   const email = o.email;
   if (email && typeof email === 'string' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
     return { ok: false, error: 'Invalid email' };
   }
+  if (String(o.message).length > 50000) return { ok: false, error: 'Message too long' };
 
-  // Message length limit (anti-abuse)
-  if (String(o.message).length > 50000) {
-    return { ok: false, error: 'Message too long' };
+  // 🔴 #4: Validation του `to` — απαγόρευση wildcards
+  if (o.type === 'reply' || o.type === 'forward') {
+    const to = String(o.to || '');
+    if (!to) return { ok: false, error: 'Recipient required' };
+    if (/[%_]/.test(to)) return { ok: false, error: 'Invalid recipient character' };
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return { ok: false, error: 'Invalid recipient email' };
   }
 
   return { ok: true, data: o as unknown as BasePayload };
 }
 
-// ─── HTML escape (αντί για regex strip) ───
 function escapeHtml(s: string): string {
   return String(s || '')
     .replace(/&/g, '&amp;')
@@ -105,43 +89,31 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
-// ─── Simple in-memory rate limiter ───
-// Σημείωση: στα Supabase edge functions κάθε instance έχει δικό του memory.
-// Επαρκές για basic protection. Για production-scale: Redis/Upstash.
-const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+// 🔴 #2: Extract domain από Origin/Referer
+function extractDomain(req: Request): string | null {
+  const origin = req.headers.get('origin');
+  const referer = req.headers.get('referer');
 
-function checkRateLimit(key: string, limit: number, windowMs: number): boolean {
-  const now = Date.now();
-  const b = rateBuckets.get(key);
+  const url = origin || referer;
+  if (!url) return null;
 
-  if (!b || now > b.resetAt) {
-    rateBuckets.set(key, { count: 1, resetAt: now + windowMs });
-    return true;
+  try {
+    const u = new URL(url);
+    return u.hostname.toLowerCase();
+  } catch {
+    return null;
   }
-
-  if (b.count >= limit) return false;
-  b.count++;
-  return true;
 }
 
 function clientIp(req: Request): string {
-  return (
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    req.headers.get('x-real-ip') ||
-    'unknown'
-  );
+  return req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    req.headers.get('x-real-ip') || 'unknown';
 }
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: CORS_HEADERS });
-  }
+  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS_HEADERS });
+  if (req.method !== 'POST') return safeError(405, 'Method not allowed');
 
-  if (req.method !== 'POST') {
-    return safeError(405, 'Method not allowed');
-  }
-
-  // ─── Parse + validate ───
   let payload: BasePayload;
   try {
     const raw = await req.json();
@@ -153,21 +125,22 @@ Deno.serve(async (req) => {
     return safeError(400, 'Invalid JSON');
   }
 
-  // ─── Auth check για reply/forward ───
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+  const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const supabase = createClient(supabaseUrl, supabaseKey);
+
+  // ─── Auth για reply/forward ───
   const authHeader = req.headers.get('Authorization') || '';
   const jwt = authHeader.replace(/^Bearer\s+/i, '');
 
   let authedUser: { id: string } | null = null;
   let userTenant: string | null = null;
-  let userRole: string | null = null;
 
   if (payload.type === 'reply' || payload.type === 'forward') {
-    // 🔴 ADMIN-ONLY: απαιτείται authenticated user
     if (!jwt) return safeError(401, 'Unauthorized');
 
-    const url = Deno.env.get('SUPABASE_URL')!;
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
-    const authClient = createClient(url, anonKey, {
+    const authClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: `Bearer ${jwt}` } },
     });
 
@@ -178,46 +151,66 @@ Deno.serve(async (req) => {
     }
     authedUser = { id: user.id };
 
-    // Πάρε tenant + role από profiles (server-side, όχι client-supplied)
-    const svc = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-    const { data: profile } = await svc
+    const { data: profile } = await supabase
       .from('profiles')
-      .select('tenant_id, role')
+      .select('tenant_id, role, is_super_admin')
       .eq('id', user.id)
       .maybeSingle();
 
     if (!profile?.tenant_id) return safeError(403, 'No tenant');
-
-    const allowedRoles = ['owner', 'admin', 'secretary'];
-    if (!allowedRoles.includes(profile.role)) {
+    if (!profile.is_super_admin && !['owner', 'admin', 'secretary'].includes(profile.role)) {
       return safeError(403, 'Insufficient role');
     }
 
     userTenant = profile.tenant_id;
-    userRole = profile.role;
   }
 
-  // ─── Rate limit για public 'new' ───
+  // ─── 🔴 #2/#3: Tenant resolution + rate limit για public 'new' ───
+  let tenantId: string | null = null;
+
   if (payload.type === 'new') {
+    // Rate limit ΜΕ shared mechanism
     const ip = clientIp(req);
-    if (!checkRateLimit(`new:${ip}`, 5, 60_000)) {
+    const rl = await supabase.rpc('check_rate_limit', {
+      p_key: `contact:${ip}`,
+      p_limit: 5,
+      p_window_seconds: 60,
+    });
+    if (rl.error) {
+      console.error('[send-contact-email] rate limit RPC error:', rl.error.message);
+      // fail-open: να μη σπάσει η φόρμα
+    } else if (rl.data === false) {
       return safeError(429, 'Too many requests');
     }
+
+    // 🔴 Tenant από domain
+    const domain = extractDomain(req);
+    if (!domain) {
+      console.error('[send-contact-email] no Origin/Referer header');
+      return safeError(400, 'Cannot determine site');
+    }
+
+    const r = await supabase.rpc('resolve_tenant_by_domain', { p_domain: domain });
+    if (r.error) {
+      console.error('[send-contact-email] domain resolve error:', r.error.message);
+      return safeError(500, 'Internal error');
+    }
+    if (!r.data) {
+      console.error('[send-contact-email] unknown domain:', domain);
+      return safeError(403, 'Site not configured');
+    }
+    tenantId = r.data;
+  } else {
+    tenantId = userTenant;
   }
 
+  if (!tenantId) return safeError(400, 'Cannot determine tenant');
+
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
-
-    // 🔴 TENANT: για reply/forward από τον authenticated user
-    //           για 'new' από env (public form, single-tenant default)
-    const tenantId = userTenant || Deno.env.get('TENANT_ID') || '00000000-0000-0000-0000-000000000001';
-
     const { data: settings } = await supabase
       .from('site_settings')
       .select('key, value')
-      .eq('tenant_id', tenantId)   // 🔴 πάντα φιλτραρισμένο
+      .eq('tenant_id', tenantId)
       .in('key', [
         'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass',
         'smtp_from_email', 'smtp_from_name', 'contact_email', 'site_name',
@@ -238,40 +231,33 @@ Deno.serve(async (req) => {
 
     if (!host || !user || !pass) return safeError(503, 'Email service not configured');
 
-    const transporter = nodemailer.createTransport({
-      host,
-      port,
-      secure: port === 465,
-      auth: { user, pass },
-    });
+    const transporter = nodemailer.createTransport({ host, port, secure: port === 465, auth: { user, pass } });
 
     let mailOptions: Record<string, unknown>;
 
     if (payload.type === 'reply') {
-      // 🔴 Ο παραλήπτης πρέπει να είναι υπαρκτή επαφή του ΙΔΙΟΥ tenant
       const target = (payload.to || '').trim().toLowerCase();
-      if (!target) return safeError(400, 'Recipient required');
 
+      // 🔴 #4: Exact match (eq, ΟΧΙ ilike)
       const { data: contact } = await supabase
         .from('contact_messages')
         .select('id')
-        .eq('tenant_id', tenantId)                    // 🔴 tenant filter
-        .ilike('email', target)
+        .eq('tenant_id', tenantId)
+        .eq('email', target)
         .limit(1)
         .maybeSingle();
 
       if (!contact) {
-        // Επίσης δέξου conversations
         const { data: conv } = await supabase
           .from('contact_conversations')
           .select('id')
           .eq('tenant_id', tenantId)
-          .ilike('email', target)
+          .eq('email', target)
           .limit(1)
           .maybeSingle();
 
         if (!conv) {
-          console.warn('[send-contact-email] reply blocked: unknown recipient', target, 'tenant', tenantId);
+          console.warn('[send-contact-email] reply blocked: unknown recipient', target);
           return safeError(403, 'Recipient not found in tenant');
         }
       }
@@ -287,15 +273,13 @@ Deno.serve(async (req) => {
         })),
       };
     } else if (payload.type === 'forward') {
-      // Ίδιος περιορισμός με reply
       const target = (payload.to || '').trim().toLowerCase();
-      if (!target) return safeError(400, 'Recipient required');
 
       const { data: contact } = await supabase
         .from('contact_conversations')
         .select('id')
         .eq('tenant_id', tenantId)
-        .ilike('email', target)
+        .eq('email', target)
         .limit(1)
         .maybeSingle();
 
@@ -304,7 +288,7 @@ Deno.serve(async (req) => {
           .from('contact_messages')
           .select('id')
           .eq('tenant_id', tenantId)
-          .ilike('email', target)
+          .eq('email', target)
           .limit(1)
           .maybeSingle();
         if (!msg) return safeError(403, 'Recipient not found in tenant');
@@ -321,7 +305,7 @@ Deno.serve(async (req) => {
         })),
       };
     } else {
-      // type === 'new' — PUBLIC CONTACT FORM
+      // type = 'new' — public form
       if (!contactEmail) return safeError(503, 'Contact email not configured');
 
       const safeName = escapeHtml(payload.name || 'Επισκέπτης');
@@ -331,7 +315,7 @@ Deno.serve(async (req) => {
 
       mailOptions = {
         from: `${fromName} <${fromEmail}>`,
-        to: contactEmail,                 // 🔴 ΜΟΝΟ ο configured παραλήπτης
+        to: contactEmail,   // 🔴 ΜΟΝΟ ο configured παραλήπτης
         replyTo: payload.email || fromEmail,
         subject: `Νέο μήνυμα από ${safeName}`,
         html: `
@@ -351,13 +335,11 @@ Deno.serve(async (req) => {
 
     await transporter.sendMail(mailOptions);
 
-    return new Response(
-      JSON.stringify({ ok: true }),
-      { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } }
-    );
-
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
   } catch (e) {
-    // 🔴 Stack trace ΜΟΝΟ στο server log
     console.error('[send-contact-email] fatal:', e instanceof Error ? e.stack : e);
     return safeError(500, 'Internal error');
   }

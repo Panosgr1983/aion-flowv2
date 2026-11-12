@@ -31,13 +31,16 @@ import { Category, Product, Customer, Order, Media, Service, BlogPost, Testimoni
 import { trackEvent } from './analytics';
 import { withTenant } from './useTenantQuery';
 import { getCurrentTenantContext } from './TenantContext';
-import { getCurrentTenantContext } from './TenantContext';
 
 
 // C4 FIX: authenticated requests για reply/forward
 async function __getAuthHeader(): Promise<Record<string, string>> {
   const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY;
+  const token = session?.access_token;
+  if (!token) {
+    // 🔴 FAIL-CLOSED: δεν στέλνουμε anon key σε admin λειτουργίες
+    throw new Error('NO_AUTH_SESSION: απαιτείται σύνδεση για αυτή την ενέργεια');
+  }
   return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
 }
 
