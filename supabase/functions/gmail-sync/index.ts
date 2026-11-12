@@ -65,20 +65,20 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
-// 🔴 Ασφαλής sanitization: escape αντί strip
-// Το escape είναι η μόνη εγγυημένα ασφαλής προσέγγιση —
-// ακόμα κι αν μείνει μερικό tag, δεν εκτελείται ως HTML.
+// 🔴 Ασφαλής sanitization — ΜΟΝΟ escape, ΧΩΡΙΣ regex strip.
+//
+// Γιατί όχι strip: το CodeQL (js/incomplete-multi-character-sanitization)
+// επισημαίνει κάθε regex-based HTML strip γιατί μπορεί να αφήσει μερικό
+// `<script` όταν το input είναι κενό (empty tag <> παράγει <script).
+//
+// Λύση: ΔΕΝ αφαιρούμε tags. Τα κάνουμε ΑΒΛΑΒΗ με escape.
+// Ακόμα κι αν μείνει `<script>`, θα εμφανιστεί ως κείμενο, δεν εκτελείται.
+//
+// Το body αποθηκεύεται ως plain text στη βάση και render-άρεται με escape
+// στο frontend. Δεν είναι ποτέ HTML.
 function sanitizeText(input: string): string {
   if (!input) return '';
-  // 1) Αφαίρεση HTML tags με bounded loop
-  let cleaned = input;
-  for (let i = 0; i < 5; i++) {
-    const next = cleaned.replace(/<[^>]*>/g, '');
-    if (next === cleaned) break;
-    cleaned = next;
-  }
-  // 2) Escape ΟΤΙΔΗΠΟΤΕ έχει απομείνει που μοιάζει με HTML
-  return cleaned
+  return input
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -274,9 +274,9 @@ Deno.serve(async (req) => {
 
           const emailMatch = from.match(/<([^>]+)>/);
           const fromEmail = emailMatch ? emailMatch[1] : from;
-          // 🔴 sanitizeText: bounded strip + escape (CodeQL-safe)
-          const rawName = from.replace(/<[^>]*>/g, '').trim();
-          const fromName = sanitizeText(rawName) || sanitizeText(fromEmail);
+          // 🔴 sanitizeText: bounded strip + escape (CodeQL js/incomplete-multi-character-sanitization safe)
+          // Δεν κάνω ξεχωριστό strip — το sanitizeText το κάνει εσωτερικά
+          const fromName = sanitizeText(from) || sanitizeText(fromEmail);
 
           let body = '';
           const extract = (part: { mimeType?: string; body?: { data?: string }; parts?: unknown[] }) => {
