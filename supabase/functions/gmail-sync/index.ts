@@ -65,18 +65,25 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
-// Αφαίρεση ετικετών HTML με ασφαλή τρόπο (για plain text extraction)
-function stripTags(s: string): string {
-  // Επαναλαμβανόμενο strip μέχρι να μην αλλάζει (αντιμετωπίζει nested tags)
-  let prev = '';
-  let cur = s;
-  let guard = 0;
-  while (prev !== cur && guard < 10) {
-    prev = cur;
-    cur = cur.replace(/<[^>]*>/g, '');
-    guard++;
+// 🔴 Ασφαλής sanitization: escape αντί strip
+// Το escape είναι η μόνη εγγυημένα ασφαλής προσέγγιση —
+// ακόμα κι αν μείνει μερικό tag, δεν εκτελείται ως HTML.
+function sanitizeText(input: string): string {
+  if (!input) return '';
+  // 1) Αφαίρεση HTML tags με bounded loop
+  let cleaned = input;
+  for (let i = 0; i < 5; i++) {
+    const next = cleaned.replace(/<[^>]*>/g, '');
+    if (next === cleaned) break;
+    cleaned = next;
   }
-  return cur;
+  // 2) Escape ΟΤΙΔΗΠΟΤΕ έχει απομείνει που μοιάζει με HTML
+  return cleaned
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 Deno.serve(async (req) => {
@@ -279,7 +286,7 @@ Deno.serve(async (req) => {
           if (full.payload) extract(full.payload);
 
           // 🔴 Sanitize: strip HTML tags με ασφαλή επαναληπτικό τρόπο
-          body = stripTags(body);
+          body = sanitizeText(body);
 
           if (!body || !fromEmail) continue;
 
